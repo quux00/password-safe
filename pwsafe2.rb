@@ -4,7 +4,11 @@ require 'gpgme'
 
 PASSWORD_SAFE_FILE = File.expand_path('~/.pwsafe2')
 
-class WebSiteEntry
+# Value object for a password safe entry
+# 
+# 
+# 
+class SafeEntry
 
   attr_accessor :name, :key, :username, :password, :url, :notes
 
@@ -18,12 +22,12 @@ class WebSiteEntry
   # @option values [String] :url - optional
   # @option values [String] :notes - optional
   def initialize(values)
-    @name     = values[:name] or raise RuntimeError, "no name provided for WebSite: #{values.inspect}"
-    @key      = values[:key]  or values[:name]  # shorthand key if desired
+    @name     = values[:name]     or raise RuntimeError, "no name provided for WebSite: #{values.inspect}"
+    @key      = values[:key]      || values[:name]  # shorthand key if desired
     @username = values[:username] or raise RuntimeError, "no username provided for WebSite: #{values.inspect}"
     @password = values[:password] or raise RuntimeError, "no password provided for WebSite: #{values.inspect}"
-    @url      = values[:url] or ''
-    @notes    = values[:notes] or ''
+    @url      = values[:url]      || ''
+    @notes    = values[:notes]    || ''
   end
   
   def to_s
@@ -40,34 +44,79 @@ end
 
 class PasswordSafe
 
-  def initialize( password, filename = File.expand_path(PASSWORD_SAFE_FILE) )
+  def initialize
+    @ary_entries = nil
+  end
+
+  def open( password, filename = File.expand_path(PASSWORD_SAFE_FILE) )
     @password = password # password for the safe
     @pwsafe   = filename # path to the safe
-    @ary_entries = []    # in memory version of entries: ary of WebSiteEntry_s
+    @ary_entries = []  # in memory version of entries: ary of SafeEntry_s
+    @crypto = GPGME::Crypto.new(:armor => true)
     read_safe
+    self
+  end
+
+  def open?
+    not @ary_entries.nil?
   end
 
   def get_entries_by_key(key)
   end
+
+  # For debugging only
+  def inspect
+    str = "Safe file: #{@pwsafe}\n"
+    str << "Entries: \n"
+    str << self.to_s
+  end
+
+  def to_s
+    # TODO: try this with reduce/inject instead?
+    str = ''
+    @ary_entries.each do |e|
+      str << e.to_s
+    end
+    str
+  end
   
-  def read
+  def read_safe
     return if not File.exist? @pwsafe
+    # crypto = GPGME::Crypto.new(:armor => true)
+    # cipher = GPGME::Data.new( IO.read(@pwsafe) )
+    # plaintxt = 
 
     entry_info = Hash.new
     File.open(@pwsafe, "r") do |fh|
       while str = fh.gets
-        (key, val) = str.split(/\s*:\s*/)
-        entry_info[key] = val
+        (key, val) = str.chomp.split(/\s*:\s*/)
+        entry_info[key.downcase.to_sym] = val if val
         if key == "Notes"
-          ary_entries << WebSiteEntry.new(entry_info)
+          @ary_entries << SafeEntry.new(entry_info)
           entry_info.clear
-        end        
+        end   
       end
     end
   end
 
 
-  def write
+  def write_safe    
+    # returns GPGME::Data obj
+    #~TODO: need to set algo cipher to AES256 => how???
+    cipher = @crypto.encrypt(self.to_s, {
+                               :symmetric => true,
+                               :password => @password,
+#                               :protocol => 4,
+                               :file => @pwsafe        #~TODO: this part is not working ...
+                             })
+    #DEBUG
+    puts "Told crypt to write to : #{@pwsafe}"
+    str = cipher.read
+    File.open("lala", "wb") do |fw|
+      fw.puts str
+    end
+    puts "Wrote enc file to ./lala as well ...."
+    #END DEBUG
   end
   
 end
@@ -109,37 +158,44 @@ def password_prompt(msg = "Enter safe password: ", b_prompt_once = true)
   first
 end
 
-def handle_request(entry)
+def handle_request(entry, safe)
+  safe = open_safe(safe) if not safe.open?
   #DEBUG
-  puts "entry = #{entry}"
+  puts safe.inspect
   #END DEBUG
+  safe
 end
 
-def open_safe
-  safe = ''
+def open_safe(safe)
   password = ''
   if not File.exist? PASSWORD_SAFE_FILE
     puts "Password safe file does not exist."
     password = password_prompt("Enter password to create new safe (q to quit): ", false)
+  else
+    password = password_prompt
   end
-  safe = PasswordSafe.new(password)
-  safe
+  safe.open(password)
+end
+
+def close_safe(safe)
+  safe.write_safe if safe.open?
 end
 
 def main
   puts "=== Welcome to Password Safe ==="
-  safe = open_safe
+  safe = PasswordSafe.new
   display_options
   while true
     e = get_user_choice
-    exit if e =~ /^q/
+    break if e =~ /^q/
     if e =~ /^h/
       display_options
     else
-      handle_request(e)
-      print "Enter choice (a, c, g, h, l, u, del or dump): "
+      safe = handle_request(e, safe)
+      print "Enter choice (a, c, g, h, l, q, u, del or dump): "
     end
   end  
+  close_safe(safe)
 end
 
 
