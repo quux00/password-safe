@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 
+require 'stringio'
 require 'gpgme'
 
 PASSWORD_SAFE_FILE = File.expand_path('~/.pwsafe2')
@@ -82,13 +83,13 @@ class PasswordSafe
   
   def read_safe
     return if not File.exist? @pwsafe
-    # crypto = GPGME::Crypto.new(:armor => true)
-    # cipher = GPGME::Data.new( IO.read(@pwsafe) )
-    # plaintxt = 
+    cipher = GPGME::Data.new( IO.read(@pwsafe) )
+    plaintxt = @crypto.decrypt(cipher, {:password => @password}).read
 
     entry_info = Hash.new
-    File.open(@pwsafe, "r") do |fh|
-      while str = fh.gets
+#    File.open(@pwsafe, "r") do |sio|
+    StringIO.open(plaintxt, "r") do |sio|
+      while str = sio.gets
         (key, val) = str.chomp.split(/\s*:\s*/)
         entry_info[key.downcase.to_sym] = val if val
         if key == "Notes"
@@ -107,16 +108,12 @@ class PasswordSafe
                                :symmetric => true,
                                :password => @password,
 #                               :protocol => 4,
-                               :file => @pwsafe        #~TODO: this part is not working ...
+#                               :file => @pwsafe        #~TODO: this part is not working ...
                              })
-    #DEBUG
-    puts "Told crypt to write to : #{@pwsafe}"
-    str = cipher.read
-    File.open("lala", "wb") do |fw|
-      fw.puts str
+    # overwrite safe with write encrypted contents
+    File.open(@pwsafe, "wb") do |fw|
+      fw.puts cipher.read
     end
-    puts "Wrote enc file to ./lala as well ...."
-    #END DEBUG
   end
   
 end
