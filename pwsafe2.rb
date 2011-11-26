@@ -4,6 +4,7 @@ require 'stringio'
 require 'gpgme'
 
 PASSWORD_SAFE_FILE = File.expand_path('~/.pwsafe2')
+DUMPFILE = "passwordsafe.plain.txt"  # default file for dumping contents to plaintext
 
 # Value object for a password safe entry
 # 
@@ -13,7 +14,7 @@ class SafeEntry
 
   attr_accessor :name, :key, :username, :password, :url, :notes
 
-  # Initializes a WebSiteInfo object
+  # Initializes a SafeEntry object
   # 
   # @param [Hash] values
   # @option values [String] :name The name of the WebSite - required
@@ -23,8 +24,16 @@ class SafeEntry
   # @option values [String] :url - optional
   # @option values [String] :notes - optional
   def initialize(values)
+    #DEBUG
+    require 'pp'
+    print "DEBUG 11: "
+    pp values.to_s
+    #END DEBUG
     @name     = values[:name]     or raise RuntimeError, "no name provided for WebSite: #{values.inspect}"
     @key      = values[:key]      || values[:name]  # shorthand key if desired
+    #DEBUG
+    puts "DEBUG 12: key just set: >>#{@key}<<"
+    #END DEBUG
     @username = values[:username] or raise RuntimeError, "no username provided for WebSite: #{values.inspect}"
     @password = values[:password] or raise RuntimeError, "no password provided for WebSite: #{values.inspect}"
     @url      = values[:url]      || ''
@@ -45,6 +54,8 @@ end
 
 class PasswordSafe
 
+  attr_accessor :password
+
   def initialize
     @ary_entries = nil
   end
@@ -52,12 +63,31 @@ class PasswordSafe
   def open( password, filename = File.expand_path(PASSWORD_SAFE_FILE) )
     @password = password # password for the safe
     @pwsafe   = filename # path to the safe
-    @ary_entries = []  # in memory version of entries: ary of SafeEntry_s
+    @ary_entries = []    # in memory version of entries: ary of SafeEntry_s
     @crypto = GPGME::Crypto.new(:armor => true)
     read_safe
     self
   end
 
+  # Add a new entry to the password safe
+  # 
+  # @param [Hash] e with required fields for new entry
+  # @option values [String] :name The name of the WebSite - required
+  # @option values [String] :key  A shorthand key for the WebSite - optional
+  # @option values [String] :username - required
+  # @option values [String] :password - required
+  # @option values [String] :url - optional
+  # @option values [String] :notes - optional
+  def add_entry(e)
+    @ary_entries << SafeEntry.new(e)
+  end
+  
+  # Predicate specifying whether the password safe has been
+  # provided a key to be opened.  If not, the open method must
+  # be called before you can use the PasswordSafe object
+  # 
+  # @return [Boolean] true if safe has been provided the correct key to
+  #                   to the open the safe and read it into memory 
   def open?
     not @ary_entries.nil?
   end
@@ -73,12 +103,7 @@ class PasswordSafe
   end
 
   def to_s
-    # TODO: try this with reduce/inject instead?
-    str = ''
-    @ary_entries.each do |e|
-      str << e.to_s
-    end
-    str
+    @ary_entries.map { |e| e.to_s }.join( "\n" + ('-' * 50) + "\n")
   end
   
   def read_safe
@@ -135,7 +160,7 @@ end
 def get_user_choice
   while true
     e = gets
-    return e if e =~ /^[acghlqu]$/ || e =~ /^del$|^dump$|^quit$/
+    return e.chomp if e =~ /^[acghlqu]$/ || e =~ /^del$|^dump$|^quit$/
     puts "Choice not recognized.  Valid options are a, c, g, h, l, u, del or dump"
     print "Enter choice: "
   end
@@ -155,11 +180,60 @@ def password_prompt(msg = "Enter safe password: ", b_prompt_once = true)
   first
 end
 
+def add_new_entry(safe)
+  # TODO: need to allow a user to abort or start over ...
+  h = Hash.new
+  print "Enter Name of new entry: "
+  h[:name] = gets.chomp
+  print "Key for lookups: "
+  h[:key] = gets.chomp
+  print "Username: "
+  h[:username] = gets.chomp
+  print "Password: "
+  h[:password] = gets.chomp
+  print "URL: "
+  h[:url] = gets.chomp
+  print "Notes: "
+  h[:notes] = gets.chomp
+  safe.add_entry(h)
+end
+
+def delete_entry(safe)
+end
+
+def update_entry(safe)
+end
+
+def get_entry(safe)
+end
+
+def list_all_entries(safe)
+  puts safe.to_s
+end
+
+def change_safe_password(safe)
+  safe.password = password_prompt("Enter new safe password: ", false)
+end
+
+def dump_to_file(safe)
+  File.open(DUMPFILE, "w") do |fw|
+    fw.puts safe.to_s
+  end
+  puts "Plain text password safe written to file: #{DUMPFILE}"
+end
+
 def handle_request(entry, safe)
   safe = open_safe(safe) if not safe.open?
-  #DEBUG
-  puts safe.inspect
-  #END DEBUG
+  case entry
+  when 'a'    then add_new_entry(safe)
+  when 'del'  then delete_entry(safe)
+  when 'u'    then update_entry(safe)
+  when 'dump' then dump_to_file(safe)
+  when 'g'    then get_entry(safe)
+  when 'l'    then list_all_entries(safe)
+  when 'c'    then change_safe_password(safe)
+  else raise RuntimeError, "Unknown user entry '#{entry}'"
+  end
   safe
 end
 
