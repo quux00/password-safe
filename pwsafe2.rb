@@ -1,9 +1,44 @@
 #!/usr/bin/env ruby
 
+# Second version of a "password safe".  This is intended to be used as a
+# command line program on a machine with Ruby 1.9, the gpgme ruby gem
+# installed, which requires GnuPG (gpg) installed plus the gpgme C library.
+# It does symmetric encryption on data in memory and writes that encrypted
+# data to file.  When opened, it prompts for a password and opens the
+# password safe, unencrypts it in memory and allows you to view all or 
+# parts of it on the command line.  Unless you choose the "dump to plaintext
+# file" functionality, this program will never write your safe data to disk,
+# thus avoiding the complexity of trying to truly erase private data from
+# modern journaling file systems.
+# 
+# I have developed and tested this on Linux (Xubuntu 11.10).
+# 
+# It has a more explicit data format than the more cryptic pwsafe.rb
+# that I wrote first.  pwsafe.rb just takes a triplet of info separated
+# by colons.  This one has 6 explicit fields:
+#  Name - name of the entity you are storing the password for
+#  Key - a shorthand key to look it up (optional - defaults to Name)
+#  Username - required
+#  Password - required
+#  URL - optional
+#  Notes - any text, but must fit on one line
+# 
+# By default this one stores the encrypted password safe at $HOME/.pwsafe
+# where as pwsafe.rb stores it as $HOME/.pws
+# 
+# I recommend running this with rlwrap:
+# rlwrap pwsafe2.rb, as it gives you up/down arrow history - makes life nice :)
+# 
+# TODO: 
+# 1. Write importer of data from .pws format?
+# 2. Use AES256, rather than default CAST5
+# 3. Handle bad password to safe
+
 require 'stringio'
 require 'gpgme'
+require 'fileutils'
 
-PASSWORD_SAFE_FILE = File.expand_path('~/.pwsafe2')
+PASSWORD_SAFE_FILE = File.expand_path('~/.pwsafe')
 DUMPFILE = "passwordsafe.plain.txt"  # default file for dumping contents to plaintext
 
 
@@ -11,19 +46,19 @@ DUMPFILE = "passwordsafe.plain.txt"  # default file for dumping contents to plai
 ### ---[ Class: SafeEntry ]--- ###
 ### -------------------------- ###
 
+#
 # Value object for a password safe entry
 # 
-# 
-# 
 class SafeEntry
+#  include Comparable
 
   attr_accessor :name, :key, :username, :password, :url, :notes
 
   # Initializes a SafeEntry object
   # 
   # @param [Hash] values
-  # @option values [String] :name The name of the WebSite - required
-  # @option values [String] :key  A shorthand key for the WebSite - optional
+  # @option values [String] :name The name of the WebSite/System - required
+  # @option values [String] :key  A shorthand key for the WebSite/System - optional
   # @option values [String] :username - required
   # @option values [String] :password - required
   # @option values [String] :url - optional
@@ -32,11 +67,10 @@ class SafeEntry
     @name     = values[:name] or raise RuntimeError, "no name provided for WebSite: #{values.inspect}"
     @key      = values[:key]
     @key      = @name if @key.nil? || @key == ''
-    @username = values[:username] or raise RuntimeError, "no username provided for WebSite: #{values.inspect}"
-    @password = values[:password] or raise RuntimeError, "no password provided for WebSite: #{values.inspect}"
-    @url      = values[:url]      || ''
-    @notes    = values[:notes]    || ''
-
+    @username = values[:username]  || ''
+    @password = values[:password]  || ''
+    @url      = values[:url]       || ''
+    @notes    = values[:notes]     || ''
   end
   
   def to_s
@@ -55,6 +89,9 @@ end
 ### ---[ Class: PasswordSafe ]--- ###
 ### ----------------------------- ###
 
+# Uses the GPGME classes to encryt and decrypt the password safe
+# in memory, writing the data back to disk when the write_safe
+# method is called.
 class PasswordSafe
 
   attr_accessor :password
@@ -69,9 +106,7 @@ class PasswordSafe
     @ary_entries = []    # in memory version of entries: ary of SafeEntry_s
     @crypto = GPGME::Crypto.new(:armor => true)
     read_safe
-    @ary_entries.sort_by! do |e|
-      e.name
-    end
+    @ary_entries.sort_by! {|e| e.name }
     self
   end
 
@@ -84,11 +119,17 @@ class PasswordSafe
   # @option values [String] :password - required
   # @option values [String] :url - optional
   # @option values [String] :notes - optional
-  def add_entry(e)
+  def add_entry(e)    
     @ary_entries << SafeEntry.new(e)
+    self.uniq_and_sort
   end
 
-  def sort
+  def number_of_entries
+    @ary_entries.size
+  end
+
+  def uniq_and_sort
+    @ary_entries.uniq!
     @ary_entries.sort_by! do |e|
       e.name
     end    
@@ -109,8 +150,8 @@ class PasswordSafe
   # @param [Number] num size
   # @return [Array<String>] returns xxx
   def update_entry(oldent, newent)
-    @ary_entries[ @ary_entries.index(oldent) ] = newent
-    self.sort
+    @ary_entries[ @ary_entries.index(oldent) ] = newent 
+    self.uniq_and_sort
   end
   
 
@@ -138,7 +179,7 @@ class PasswordSafe
     @ary_entries = @ary_entries - ary_e
   end
 
-  # For debugging only
+  # For debugging only - call to_s for the format to write to disk
   def inspect
     str = "Safe file: #{@pwsafe}\n"
     str << "Entries: \n"
@@ -148,7 +189,10 @@ class PasswordSafe
   # Returns all entries as a string with "--------" line delimeter
   # between them.  The strings are created by calling to_s on each entry.
   # 
-  # @return [String] returns String representation of all entries in the safe
+  # @param [Array<SafeEntry>] - optional - defaults to the complete list held
+  #   in this class, but you can ask it to format a subset by passing that in
+  #   as the optional param
+  # @return [String] returns String representation of the entries
   def to_s(entries = @ary_entries)
     entries.map { |e| e.to_s }.join( "\n" + ('-' * 50) + "\n")
   end
@@ -177,19 +221,24 @@ class PasswordSafe
   end
 
 
+  # xxxxxxxxxxxxxxxxxxx
+  # 
+  #
+  # @return [void]
   def write_safe    
     # returns GPGME::Data obj
-    #~TODO: need to set algo cipher to AES256 => how???
     cipher = @crypto.encrypt(self.to_s, {
                                :symmetric => true,
                                :password => @password,
-                               #                               :protocol => 4,
-                               #                               :file => @pwsafe        #~TODO: this part is not working ...
+                               # :protocol => 4,    #~TODO: need to set algo cipher to AES256 => how???
+                               # :file => @pwsafe   #~TODO: this part is not working ...
                              })
     # overwrite safe with write encrypted contents
     File.open(@pwsafe, "wb") do |fw|
       fw.puts cipher.read
     end
+    # make backup copy in case something bad happened
+    FileUtils.cp(@pwsafe, "#{@pwsafe}.BAK." + Time.now.to_i.to_s)
   end
   
 end
@@ -203,22 +252,27 @@ end
 def display_options
   puts "Options available..."
   puts " a:    add entry"
+  puts " c:    change safe password"
   puts " del:  delete entry"
-  puts " u:    update entry"
   puts " dump: dump all entries to plaintext file"
   puts " g:    get an entry or entries that match a partial string"
-  puts " l:    list all entries"
-  puts " c:    change safe password"
   puts " h:    help (show this screen)"
+  puts " l:    list all entries"
   puts " q:    quit"
+  puts " s:    size (total number entries)"
+  puts " u:    update entry"
   print "Enter option: "
+end
+
+def valid_options
+  "a, c, g, h, l, q, s, u, del or dump"
 end
 
 def get_user_choice
   while true
     e = gets
-    return e.chomp if e =~ /^[acghlqu]$/ || e =~ /^del$|^dump$|^quit$/
-    puts "Choice not recognized.  Valid options are a, c, g, h, l, u, del or dump"
+    return e.chomp if e =~ /^[acghlqsu]\s*$/ || e =~ /^del\s*$|^dump\s*$|^quit\s*$/
+    puts "Choice not recognized.  Valid options are #{valid_options}"
     print "Enter choice: "
   end
 end
@@ -298,41 +352,52 @@ def delete_entry(safe)
   end
 end
 
+# Handles interaction with user to get the new
+# fields to change in an existing entry.
+# 
+# @param [PasswordSafe] already opened of course
+# @param [SafeEntry] to be updated
+# @return [void]
+def handle_single_entry_update(safe, entry)
+  puts "Matched:\n#{entry.to_s}"
+  while true
+    print "Edit password (p) or all fields (a)? (P/a): "
+    sel = gets.chomp
+    case sel
+    when '', 'p', 'P'
+      sel = :password
+      break
+    when 'a', 'A'
+      sel = :all
+      break
+    else
+      puts "Input '#{sel}' not recognized."
+    end
+  end  
+  
+  if sel == :password
+    replace = entry.dup
+    print "Enter new password: " 
+    replace.password = gets.chomp
+  else
+    h = prompt_for_all_safe_entry_fields
+    replace = SafeEntry.new(h)
+  end
+  safe.update_entry(entry, replace)
+end
+
+
 def update_entry(safe)
   ary = user_lookup_prompt(safe)
   if ary.size == 0
     puts "No entry found"
   elsif ary.size > 1
-    puts "More than one entry matched: "
-    ary.each {|e| puts "  #{e}"}
+    puts "*** ERROR: More than one entry matched: ***"
+    ary.each {|e| puts "#{e}"}
     puts "Please refine search"
   else
     # size == 1, proceed to get new info
-    puts "Matched:\n#{ary.first.to_s}"
-    while true
-      print "Edit password (p) or all fields (a)? (P/a): "
-      sel = gets.chomp
-      case sel
-      when '', 'p', 'P'
-        sel = :password
-        break
-      when 'a', 'A'
-        sel = :all
-        break
-      else
-        puts "Input '#{sel}' not recognized."
-      end
-    end  
-
-    if sel == :password
-      replace = ary.first.dup
-      print "Enter new password: " 
-      replace.password = gets.chomp
-    else
-      h = prompt_for_all_safe_entry_fields
-      replace = SafeEntry.new(h)
-    end
-    safe.update_entry(ary.first, replace)
+    handle_single_entry_update(safe, ary.first)
   end
 end
 
@@ -356,8 +421,12 @@ def dump_to_file(safe)
   puts "Plain text password safe written to file: #{DUMPFILE}"
 end
 
+def print_size(safe)
+  puts "Number of entries in the safe: #{safe.number_of_entries}"
+end
+
 def handle_request(entry, safe)
-  safe = open_safe(safe) if not safe.open?
+  open_safe(safe) if not safe.open?
   case entry
   when 'a'    then add_new_entry(safe)
   when 'del'  then delete_entry(safe)
@@ -366,9 +435,9 @@ def handle_request(entry, safe)
   when 'g'    then get_entry(safe)
   when 'l'    then list_all_entries(safe)
   when 'c'    then change_safe_password(safe)
+  when 's'    then print_size(safe)
   else raise RuntimeError, "Unknown user entry '#{entry}'"
   end
-  safe
 end
 
 def open_safe(safe)
@@ -379,28 +448,64 @@ def open_safe(safe)
   else
     password = password_prompt
   end
-  safe.open(password)
+  begin
+    safe.open(password)
+  rescue => ex
+    case ex
+    when GPGME::Error::DecryptFailed
+      puts "ERROR: Incorrect password"
+      open_safe(safe)
+    else
+      raise ex
+    end
+  end
 end
 
 def close_safe(safe)
   safe.write_safe if safe.open?
 end
 
+def help_and_exit
+  $stderr.puts "pwsafe2.rb [OPTIONS]"
+  $stderr.puts "  -h      : this help screen"
+  $stderr.puts "  -f FILE : an alternative encrypted pwsafe password file"
+  exit
+end
+
 def main
+  if ARGV.size > 0
+    if ARGV.first =~ /-{1,2}h(elp)?/
+      help_and_exit
+    elsif ARGV.first == '-f' && ARGV.size == 2
+      #~ TODO: complete this section
+    else
+      $stderr.puts "ERROR: command line switch not recognized"
+      help_and_exit
+    end
+  end
+
   puts "=== Welcome to Password Safe ==="
+
+  # initialize an unopened safe
+  # don't prompt for password until they choose an action that requires it
   safe = PasswordSafe.new
   display_options
+
+  # loop until user explicit says to quit (with 'q')
   while true
     e = get_user_choice
     break if e =~ /^q/
     if e =~ /^h/
       display_options
     else
-      safe = handle_request(e, safe)
-      print "Enter choice (a, c, g, h, l, q, u, del or dump): "
+      handle_request(e, safe)
+      print "Enter choice (#{valid_options}): "
     end
   end  
   close_safe(safe)
+
+rescue => ex
+  exit -1
 end
 
 
