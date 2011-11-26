@@ -11,7 +11,7 @@
 # thus avoiding the complexity of trying to truly erase private data from
 # modern journaling file systems.
 # 
-# I have developed and tested this on Linux (Xubuntu 11.10).
+# I have developed and tested this on Linux (Xubuntu 11.10) with Ruby 1.9.2
 # 
 # It has a more explicit data format than the more cryptic pwsafe.rb
 # that I wrote first.  pwsafe.rb just takes a triplet of info separated
@@ -29,18 +29,30 @@
 # I recommend running this with rlwrap:
 # rlwrap pwsafe2.rb, as it gives you up/down arrow history - makes life nice :)
 # 
+# Another advantage of pwsafe2 over pwsafe is that it uses GPG libraries to do
+# the encryption, so you can use the command line gpg program to unencrypt the
+# .pwsafe file, in case this program is ever lost or stops working.
+# 
 # TODO: 
 # 1. Write importer of data from .pws format?
 # 2. Use AES256, rather than default CAST5
-# 3. Handle bad password to safe
+# X. Handle bad password to safe
+# X. URLs with ':' are disappearing
+# 5. Test using alternate file with -f switch => what file does it write to?
+# 
+# Author: Michael Peterson
+# @midpeter444
+# https://github.com/midpeter444
 
 require 'stringio'
 require 'gpgme'
 require 'fileutils'
 
-PASSWORD_SAFE_FILE = File.expand_path('~/.pwsafe')
+DEFAULT_PASSWORD_SAFE_FILE = File.expand_path('~/.pwsafe')
 DUMPFILE = "passwordsafe.plain.txt"  # default file for dumping contents to plaintext
 
+# can change at runtime if user uses -f switch on cmd line
+@@password_safe_file = DEFAULT_PASSWORD_SAFE_FILE
 
 ### -------------------------- ###
 ### ---[ Class: SafeEntry ]--- ###
@@ -50,7 +62,7 @@ DUMPFILE = "passwordsafe.plain.txt"  # default file for dumping contents to plai
 # Value object for a password safe entry
 # 
 class SafeEntry
-#  include Comparable
+  #  include Comparable
 
   attr_accessor :name, :key, :username, :password, :url, :notes
 
@@ -100,7 +112,7 @@ class PasswordSafe
     @ary_entries = nil
   end
 
-  def open( password, filename = File.expand_path(PASSWORD_SAFE_FILE) )
+  def open( password, filename = File.expand_path(@@password_safe_file) )
     @password = password # password for the safe
     @pwsafe   = filename # path to the safe
     @ary_entries = []    # in memory version of entries: ary of SafeEntry_s
@@ -197,22 +209,26 @@ class PasswordSafe
     entries.map { |e| e.to_s }.join( "\n" + ('-' * 50) + "\n")
   end
 
-  # xxxxxxx
-  # 
+  # Reads in the contents of the encrypted safe, decrypts it and turns it
+  # into in memory data (an array of SafeEntry objects)
   # 
   # @return [void]
   def read_safe
     return if not File.exist? @pwsafe
     cipher = GPGME::Data.new( IO.read(@pwsafe) )
     plaintxt = @crypto.decrypt(cipher, {:password => @password}).read
-
+    
     entry_info = Hash.new
-    #    File.open(@pwsafe, "r") do |sio|
+
     StringIO.open(plaintxt, "r") do |sio|
       while str = sio.gets
-        (key, val) = str.chomp.split(/\s*:\s*/)
-        entry_info[key.downcase.to_sym] = val if val
-        if key == "Notes"
+        next if str =~ /^\s*-----/
+        matches = str.chomp.match(/^([^:]+):(.*)$/)
+        k = matches[1].strip
+        v = matches[2].strip
+
+        entry_info[k.downcase.to_sym] = v if v
+        if k == "Notes"
           @ary_entries << SafeEntry.new(entry_info)
           entry_info.clear
         end   
@@ -221,9 +237,10 @@ class PasswordSafe
   end
 
 
-  # xxxxxxxxxxxxxxxxxxx
+  # Encrypts the in memory contents of the safe and writes it to file
+  # Currently it encrypts using the default GPG symmetric cipher (CAST5)
+  # I want to figure out how to change this later ...
   # 
-  #
   # @return [void]
   def write_safe    
     # returns GPGME::Data obj
@@ -403,7 +420,7 @@ end
 
 def get_entry(safe)
   r = safe.to_s( user_lookup_prompt(safe) )
-  puts (r != '' ? r : "No match found")
+  puts r != '' ? r : "No match found"
 end
 
 def list_all_entries(safe)
@@ -442,7 +459,7 @@ end
 
 def open_safe(safe)
   password = ''
-  if not File.exist? PASSWORD_SAFE_FILE
+  if not File.exist? @@password_safe_file
     puts "Password safe file does not exist."
     password = password_prompt("Enter password to create new safe: ", false)
   else
@@ -468,7 +485,7 @@ end
 def help_and_exit
   $stderr.puts "pwsafe2.rb [OPTIONS]"
   $stderr.puts "  -h      : this help screen"
-  $stderr.puts "  -f FILE : an alternative encrypted pwsafe password file"
+  $stderr.puts "  -f FILE : use alternative encrypted pwsafe password file"
   exit
 end
 
@@ -477,7 +494,12 @@ def main
     if ARGV.first =~ /-{1,2}h(elp)?/
       help_and_exit
     elsif ARGV.first == '-f' && ARGV.size == 2
-      #~ TODO: complete this section
+      if File.exist? ARGV[1]
+        @@password_safe_file = ARGV[1]
+      else
+        $stderr.puts "ERROR: file '#{ARGV[1]}' cannot be found"
+        exit
+      end
     else
       $stderr.puts "ERROR: command line switch not recognized"
       help_and_exit
@@ -505,7 +527,9 @@ def main
   close_safe(safe)
 
 rescue => ex
-  exit -1
+  $stderr.puts "Error: #{ex}"
+  ex.backtrace
+  exit(-1)
 end
 
 
