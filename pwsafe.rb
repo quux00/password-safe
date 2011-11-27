@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 #
 # # # # # # # # #
+# Adapted from version from Jan Lelis => his notes below:
+# # # # # # # # #
 # /41/pws_2.rb
 #
 # by               Jan Lelis
@@ -37,9 +39,6 @@ require 'openssl'
 require 'fileutils'
 require 'optparse'
 require 'pp'
-#DEBUG
-require 'pry'
-#END DEBUG
 
 def parse_options
   options = {}
@@ -746,5 +745,3 @@ end
 
 
 __END__
-c:/Users/Petermi1/home/.pws=Cure-Rockford
-/home/midpeter444/.pws=Cure-Rockford
