@@ -30,6 +30,15 @@ The Ruby GPGME examples for symmetric encryption I have seen only use the defaul
 
 To use pwsafe2.rb, you will need to install the gpgme ruby gem. I have developed and tested against the 2.0.0 gem.  You will also need the GnuPG program installed and any appropriate libraries that come with it.
 
+## Future Directions
+
+Right now *pwsafe2.rb* code depends on doing a `system("stty -echo")`, which I've discovered is incompatible with JRuby, so you can only run with MRI Ruby.  I plan on testing it on Windows in cygwin or Mingw32 soon.
+
+It could be possible to use the ffi-ncurses ruby gem, but I can't get that to run on my Xubuntu 11.10 machine (can't find the ncurses library), so that's on hold for now as well.
+
+Longer term idea would be to turn this into a GUI (non-command line) based app.  I would probably do it in JRuby using Swing or SWT, as I'd like to relearn how to use those libraries and playing with JRuby is fun.  But low priority for now ...
+
+
 ## General Disclaimer and "License"
 
 These programs are free to anyone else to use or improve upon.  I issue it under the MIT License, copyright 2011: http://www.opensource.org/licenses/mit-license.php.  Note also that pwsafe is based on code from Jan Lelis - see the rdoc header for his license release information.

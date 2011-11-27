@@ -44,6 +44,7 @@
 # @midpeter444
 # https://github.com/midpeter444
 
+require 'rubygems'
 require 'stringio'
 require 'gpgme'
 require 'fileutils'
